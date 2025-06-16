@@ -54,15 +54,13 @@ def main():
         textarea.send_keys(prompt)
         textarea.send_keys(Keys.ENTER)
 
-        # Wait for response to finish (look for 'Regenerate' or 'Stop generating' button to disappear)
         last_response = ''
-        for _ in range(60):  # Wait up to 60 seconds
+        for _ in range(60): 
             try:
                 # Get all message blocks (ChatGPT responses)
                 messages = driver.find_elements(By.CSS_SELECTOR, '[data-message-author-role="assistant"]')
                 if messages:
                     last_response = messages[-1].text
-                # Check if 'Regenerate' or 'Stop generating' is present
                 regen = driver.find_elements(By.XPATH, "//*[contains(text(), 'Regenerate') or contains(text(), 'Stop generating')]")
                 if not regen:
                     break
@@ -77,7 +75,7 @@ def main():
         row = {'prompt': prompt, **counts}
         results.append(row)
         print(f"Response: {counts}")
-        time.sleep(3)  # Be polite to the site
+        time.sleep(3) 
 
     # Save to CSV
     df = pd.DataFrame(results)

@@ -1,17 +1,11 @@
 import os
-import time
-import json
+import asyncio
+import csv
+import random
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from pyppeteer import launch
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 class ChatGPTScraper:
@@ -30,82 +24,121 @@ class ChatGPTScraper:
             "Best shoes for high-impact sports"
         ]
         self.results = []
-        
-    def setup_driver(self):
-        """Set up Chrome driver with user profile"""
-        chrome_options = Options()
-        
-        # Get the user's Chrome profile directory
-        user_data_dir = os.getenv('CHROME_USER_DATA_DIR')
-        if not user_data_dir:
-            raise ValueError("Please set CHROME_USER_DATA_DIR in .env file")
-            
-        chrome_options.add_argument(f"user-data-dir={user_data_dir}")
-        chrome_options.add_argument("--profile-directory=Default")
-        
-        # Initialize the Chrome driver
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        return driver
+
+    async def setup_browser(self):
+        chrome_path = os.getenv('CHROME_EXECUTABLE_PATH')
+        if not chrome_path or not os.path.exists(chrome_path):
+            print("Could not find Chrome executable path in .env or the path is invalid.")
+            print("Please enter the full path to your chrome.exe (e.g., C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe):")
+            chrome_path = input().strip()
+            if not os.path.exists(chrome_path):
+                raise ValueError(f"Chrome executable not found at {chrome_path}")
+            with open('.env', 'a') as f:
+                f.write(f"\nCHROME_EXECUTABLE_PATH={chrome_path}")
+        print(f"Launching Chrome from: {chrome_path}")
+        browser = await launch({
+            'headless': False,
+            'executablePath': chrome_path,
+            'args': [
+                '--window-size=1920,1080',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-site-isolation-trials',
+                '--no-sandbox'
+            ],
+            'ignoreDefaultArgs': ['--enable-automation'],
+            'handleSIGINT': False,
+            'handleSIGTERM': False,
+            'handleSIGHUP': False
+        })
+        return browser
+
+    async def robust_type(self, page, selector, text, prompt_idx=0):
+        await page.evaluate(f'''
+            (selector) => {{
+                const el = document.querySelector(selector);
+                if (el) el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+            }}
+        ''', selector)
+        await asyncio.sleep(0.5)
+        await page.focus(selector)
+        await asyncio.sleep(0.2)
+        try:
+            await page.type(selector, text, {'delay': random.randint(50, 150)})
+        except Exception as e:
+            print(f"page.type() failed, trying JS injection: {e}")
+            # Set innerText directly and dispatch input event
+            await page.evaluate(f'''
+                (selector, value) => {{
+                    const el = document.querySelector(selector);
+                    el.innerText = value;
+                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                }}
+            ''', selector, text)
+        await asyncio.sleep(0.5)
+
+    async def random_scroll(self, page):
+        await page.evaluate(f'''
+            window.scrollBy(0, {random.randint(100, 300)});
+        ''')
+        await asyncio.sleep(random.uniform(0.5, 1.5))
 
     def count_brand_mentions(self, text):
-        """Count mentions of each brand in the text"""
         counts = {brand: text.lower().count(brand.lower()) for brand in self.brands}
         return counts
 
-    def scrape_responses(self):
-        """Main function to scrape ChatGPT responses"""
-        driver = self.setup_driver()
-        
+    async def scrape_responses(self):
+        browser = await self.setup_browser()
+        page = await browser.newPage()
         try:
-            # Navigate to ChatGPT
-            driver.get("https://chat.openai.com/")
-            time.sleep(5)  # Wait for page to load
-            
-            for prompt in self.prompts:
+            await page.setViewport({'width': 1920, 'height': 1080})
+            await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36')
+            print("Navigating to ChatGPT...")
+            await page.goto('https://chat.openai.com/')
+            await asyncio.sleep(5)
+            print("Please log in to ChatGPT in the opened browser, then press Enter here to continue...")
+            input()
+            for idx, prompt in enumerate(self.prompts):
                 print(f"Processing prompt: {prompt}")
-                
-                # Find and fill the input box
-                input_box = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "textarea[data-id='root']"))
-                )
-                input_box.clear()
-                input_box.send_keys(prompt)
-                input_box.submit()
-                
-                # Wait for response
-                time.sleep(10)  # Adjust based on response time
-                
-                # Get the response text
-                response_elements = driver.find_elements(By.CSS_SELECTOR, "div.markdown")
-                response_text = " ".join([elem.text for elem in response_elements])
-                
-                # Count brand mentions
+                await self.random_scroll(page)
+                selector = '#prompt-textarea'
+                print(f"Waiting for input box with selector: {selector}")
+                await page.waitForSelector(selector, {'timeout': 20000})
+                print("Input box found, typing prompt...")
+                await self.robust_type(page, selector, prompt, idx)
+                print("Prompt typed.")
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                await page.keyboard.press('Enter')
+                print("Prompt sent. Waiting for response...")
+                await asyncio.sleep(random.uniform(8, 12))
+                await self.random_scroll(page)
+                response_elements = await page.querySelectorAll('div.markdown')
+                response_text = ' '.join([await page.evaluate('(element) => element.textContent', element) for element in response_elements])
                 brand_counts = self.count_brand_mentions(response_text)
-                
-                # Store results
                 result = {
                     "prompt": prompt,
                     "timestamp": datetime.now().isoformat(),
-                    "brand_mentions": brand_counts
+                    **brand_counts
                 }
                 self.results.append(result)
-                
-                # Save results after each prompt
-                self.save_results()
-                
-                time.sleep(2)  # Brief pause between prompts
-                
+                self.save_results_csv()
+                await asyncio.sleep(random.uniform(2, 4))
         except Exception as e:
             print(f"An error occurred: {str(e)}")
         finally:
-            driver.quit()
+            await browser.close()
 
-    def save_results(self):
-        """Save results to JSON file"""
-        with open('brand_mentions.json', 'w') as f:
-            json.dump(self.results, f, indent=2)
+    def save_results_csv(self):
+        fieldnames = ["prompt", "timestamp"] + self.brands
+        with open('brand_mentions.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in self.results:
+                writer.writerow(row)
+
+async def main():
+    scraper = ChatGPTScraper()
+    await scraper.scrape_responses()
 
 if __name__ == "__main__":
-    scraper = ChatGPTScraper()
-    scraper.scrape_responses() 
+    asyncio.get_event_loop().run_until_complete(main()) 
