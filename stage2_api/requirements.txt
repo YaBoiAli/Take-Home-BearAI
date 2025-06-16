@@ -1,4 +1,4 @@
-fastapi
-uvicorn
-sqlalchemy
-pandas 
+fastapi==0.110.2
+uvicorn==0.29.0
+pandas==2.2.1
+sqlite-utils==3.36 
