@@ -14,11 +14,10 @@ BRANDS = ['Nike', 'Adidas', 'Hoka', 'New Balance', 'Jordan']
 app = FastAPI()
 
 def init_db():
-    if not os.path.exists(DB_PATH):
-        df = pd.read_csv(CSV_PATH)
-        conn = sqlite3.connect(DB_PATH)
-        df.to_sql('mentions', conn, index=False, if_exists='replace')
-        conn.close()
+    df = pd.read_csv(CSV_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    df.to_sql('mentions', conn, index=False, if_exists='replace')
+    conn.close()
 
 @app.on_event('startup')
 def startup_event():
